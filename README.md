@@ -259,7 +259,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 **Wenqisi (Lydia) Pan**  
 PhD Candidate, Statistics  
 University of Texas at Arlington  
-📧 wensqisi.pan@mavs.uta.edu  
+📧 wenqisi.pan@uta.edu  
 🔗 [GitHub](https://github.com/yourusername)
 
 **Advisor: Dr. Xinlei Wang**  
@@ -270,7 +270,6 @@ University of Texas at Arlington
 ## Acknowledgments
 
 - Dr. Xinlei Wang for invaluable guidance and mentorship
-- UTA American Statistical Association Student Chapter
 - Developers of `estmeansd` and `metaBLUE` packages for comparison methods
 
 ## References
