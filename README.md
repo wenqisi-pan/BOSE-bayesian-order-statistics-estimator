@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A Bayesian methodology for meta-analysis that recovers sample mean and standard deviation from order statistics (quantiles) using Type 1 quantile definitions.
+A Bayesian methodology for meta-analysis that recovers the sample mean and standard deviation from order statistics (quantiles).
 
 ## Overview
 
@@ -16,10 +16,6 @@ BOSE (Bayesian Order Statistics Estimator) provides a rigorous Bayesian framewor
 - ✅ **Comprehensive Validation**: Extensive simulation studies comparing with existing methods
 - ✅ **Production-Ready Code**: Modular design with complete documentation
 - ✅ **Example Data Included**: Ready-to-use cardiovascular study examples
-
-### Critical Finding
-
-**Type 1 quantiles provide superior uncertainty quantification compared to Type 7 quantiles.** Our research demonstrates that Type 1 quantiles (using `ceiling(p*n)`) maintain proper 95% credible interval coverage, while Type 7 quantiles (R's default) exhibit systematic under-coverage for certain sample sizes.
 
 ---
 
@@ -136,8 +132,8 @@ L(μ, σ | X) ∝ ∏ᵢ φ(Xᵢ; μ, σ) × ∏ⱼ [F(Xⱼ₊₁) - F(Xⱼ)]^(k
 - σ² ~ InverseGamma(0.01, 0.01) [non-informative]
 
 **Posterior Approximation (Two-Stage Adaptive Grid):**
-1. **Coarse grid** (128 × 128) to identify high-posterior-density region
-2. **Fine grid** (256 × 256) within region containing 99% of posterior mass
+1. **Coarse grid** to identify high-posterior-density region
+2. **Fine grid** within region containing 99% of posterior mass
 3. **Sample** proportional to posterior density (default: 1000 draws)
 
 ### Type 1 vs Type 7 Quantiles
@@ -149,7 +145,7 @@ The choice of quantile definition critically impacts credible interval coverage:
 | **Type 1** (BOSE) | `k = ceiling(p × n)` | No interpolation, conservative | ✅ Maintains 95% |
 | **Type 7** (R default) | Linear interpolation | Smoother, can underestimate uncertainty | ❌ Under-coverage for certain n |
 
-**Key Insight:** Type 7's interpolation between order statistics artificially reduces uncertainty, leading to systematic under-coverage for sample sizes where n mod 4 ≠ 0.
+**Key Insight:** Type 7's interpolation between order statistics artificially reduces uncertainty, leading to systematic under-coverage for sample sizes where n mod 4 ≠ 1.
 
 ---
 
@@ -354,8 +350,6 @@ BOSE-bayesian-order-statistics-estimator/
 └── data/                               # Example datasets
     └── example_studies.csv             # Cardiovascular studies (10 studies)
 ```
-
-**Total: ~2,900 lines of documented, production-ready R code**
 
 ---
 
