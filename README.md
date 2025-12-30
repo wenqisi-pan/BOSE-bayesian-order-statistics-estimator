@@ -1,4 +1,4 @@
-# BOSE: Bayesian Order Statistics Estimator
+# BOSE: Bayesian Order Statistics based Estimator
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
