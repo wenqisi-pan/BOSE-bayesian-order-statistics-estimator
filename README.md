@@ -270,6 +270,7 @@ University of Texas at Arlington
 ## Acknowledgments
 
 - Dr. Xinlei Wang for invaluable guidance and mentorship
+- Dr. Zeyu Lu for helpful discussions and assistance during this project
 - Developers of `estmeansd` and `metaBLUE` packages for comparison methods
 
 ## References
