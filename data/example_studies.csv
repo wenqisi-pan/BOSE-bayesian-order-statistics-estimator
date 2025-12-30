@@ -1,0 +1,11 @@
+Study,S,min,q1,median,q3,max,n,distribution,source
+Study 1 Case,1,2.25,NA,16.0,NA,74.25,40,Approximately normal,Cardiovascular study
+Study 1 Control,1,9.0,NA,27.25,NA,132.5,40,Approximately normal,Cardiovascular study
+Study 2 Case,1,43.75,NA,65.75,NA,130.5,40,Approximately normal,Cardiovascular study
+Study 2 Control,1,48.5,NA,69.5,NA,125.0,38,Approximately normal,Cardiovascular study
+Study 3 Case,1,16.75,NA,39.75,NA,89.25,15,Approximately normal,Cardiovascular study
+Study 3 Control,1,26.25,NA,65.5,NA,114.75,15,Approximately normal,Cardiovascular study
+Study 4 Case,2,NA,12.5,18.0,25.3,NA,50,Slightly skewed,Clinical trial
+Study 4 Control,2,NA,15.2,22.5,30.8,NA,48,Slightly skewed,Clinical trial
+Study 5 Case,3,8.2,14.5,20.0,28.5,45.0,60,Moderately skewed,Observational study
+Study 5 Control,3,10.5,18.0,25.5,35.2,52.3,58,Moderately skewed,Observational study
