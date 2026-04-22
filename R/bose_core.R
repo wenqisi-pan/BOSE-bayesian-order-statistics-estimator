@@ -1,400 +1,360 @@
-#' BOSE: Bayesian Order Statistics Estimator - Core Functions
-#' 
-#' This file contains the main functions for Bayesian estimation of mean and
-#' standard deviation from order statistics using Type 1 quantiles.
-#' 
-#' @author Wenqisi (Lydia) Pan
-#' @references Pan, W. & Wang, X. (2025). BOSE: A Bayesian Order Statistics
-#'   Estimator for Recovering the Sample Mean and Standard Deviation
+library(Rcpp)
+library(estmeansd)
+library(metaBLUE)
+library(tidyverse)
 
-# Required packages
-# library(estmeansd)
-# library(metaBLUE)
+# ============================================================================
+# Rcpp Core Functions
+# ============================================================================
 
-#===============================================================================
-#                         TYPE 1 QUANTILE INDICES
-#===============================================================================
+rcpp_code <- '
+#include <Rcpp.h>
+#include <cmath>
+#include <algorithm>
+#include <vector>
+using namespace Rcpp;
 
-#' Calculate Type 1 Quantile Indices
-#'
-#' Computes the order statistic indices for Type 1 quantiles (ceiling method).
-#' This is a key methodological contribution: Type 1 quantiles provide proper
-#' credible interval coverage while Type 7 exhibits systematic under-coverage.
-#'
-#' @param n Sample size (integer)
-#' @param S Scenario type (integer: 1, 2, or 3)
-#'   - S=1: three-number summary {min, median, max}
-#'   - S=2: quartile summary {Q1, median, Q3}
-#'   - S=3: five-number summary {min, Q1, median, Q3, max}
-#'
-#' @return List of indices (k1, k2, k3, or k0-k4 depending on S)
-#'
-#' @details Type 1 quantiles use ceiling(p*n) for the pth quantile index.
-#'   This avoids interpolation issues that affect uncertainty quantification.
-#'
-#' @examples
-#' get_type1_indices(30, S = 1)  # Returns: k1=1, k2=15, k3=30
-#' get_type1_indices(30, S = 2)  # Returns: k1=8, k2=15, k3=23
-#'
-#' @export
-get_type1_indices <- function(n, S) {
-  # Type 1: ceiling method (round up)
-  if (S == 1) {
-    # {min, median, max}
-    list(
-      k1 = 1,
-      k2 = ceiling(0.5 * n),
-      k3 = n
-    )
-  } else if (S == 2) {
-    # {Q1, median, Q3}
-    list(
-      k1 = ceiling(0.25 * n),
-      k2 = ceiling(0.5 * n),
-      k3 = ceiling(0.75 * n)
-    )
-  } else if (S == 3) {
-    # {min, Q1, median, Q3, max}
-    list(
-      k0 = 1,
-      k1 = ceiling(0.25 * n),
-      k2 = ceiling(0.5 * n),
-      k3 = ceiling(0.75 * n),
-      k4 = n
-    )
-  } else {
-    stop("Invalid S value. Must be 1, 2, or 3.")
-  }
+const double TINY = 1e-300;
+const double LOG_TINY = std::log(TINY);
+const double SQRT_2 = 1.4142135623730951;
+const double LOG_SQRT_2PI = 0.9189385332046727;
+
+inline double dnorm_log(double x, double mu, double sigma) {
+    double z = (x - mu) / sigma;
+    return -0.5 * z * z - std::log(sigma) - LOG_SQRT_2PI;
+}
+inline double pnorm_fast(double x) {
+    return 0.5 * (1.0 + std::erf(x / SQRT_2));
+}
+inline double safe_log(double x) {
+    return (x > TINY) ? std::log(x) : LOG_TINY;
 }
 
-#===============================================================================
-#                         LOG POSTERIOR COMPUTATION
-#===============================================================================
+// Log-posterior on (mu, sigma) grid.
+// Type 1 quantile indices: ceiling-based.
+// Priors: mu ~ Uniform(L,U), sigma^2 ~ Inv-Gamma(alpha, beta).
+// [[Rcpp::export]]
+NumericMatrix compute_logpost_grid_cpp(
+    NumericVector mu_grid, NumericVector sigma_grid, NumericVector X,
+    int n, int S, double L, double U,
+    double alpha_prior, double beta_prior
+) {
+    int G1 = mu_grid.size(), G2 = sigma_grid.size(), nX = X.size();
+    NumericMatrix log_post(G1, G2);
+    double log_prior_mu = -std::log(U - L);
 
-#' Compute Log Posterior on Grid (Vectorized, Type 1)
-#'
-#' Efficiently computes the log posterior density over a 2D grid of (mu, sigma)
-#' using vectorized operations. Uses Type 1 quantile indices.
-#'
-#' @param mu_grid Vector of mu values
-#' @param sigma_grid Vector of sigma values  
-#' @param X Vector of observed order statistics
-#' @param n Sample size (integer)
-#' @param S Scenario type (1, 2, or 3)
-#' @param L Lower bound for mu prior (uniform on [L, U])
-#' @param U Upper bound for mu prior
-#' @param alpha Shape parameter for inverse-gamma prior on sigma^2 (default: 0.01)
-#' @param beta Scale parameter for inverse-gamma prior on sigma^2 (default: 0.01)
-#'
-#' @return Matrix (G1 x G2) of log posterior values
-#'
-#' @details The posterior is proportional to:
-#'   likelihood × prior(mu) × prior(sigma^2)
-#'   where prior(mu) ~ Uniform(L, U) and prior(sigma^2) ~ InvGamma(alpha, beta)
-#'
-#' @examples
-#' mu_grid <- seq(4, 6, length.out = 100)
-#' sigma_grid <- seq(0.5, 2, length.out = 100)
-#' X <- c(3.2, 5.0, 6.8)  # min, median, max
-#' logpost <- compute_logpost_grid_fast(mu_grid, sigma_grid, X, n=30, S=1, L=0, U=10)
-#'
-#' @export
-compute_logpost_grid_fast <- function(mu_grid, sigma_grid, X, n, S, L, U,
-                                      alpha = 0.01, beta = 0.01) {
-  
-  G1 <- length(mu_grid)
-  G2 <- length(sigma_grid)
-  
-  # Build meshgrid: MU is G1 x G2, SIG is G1 x G2
-  MU <- matrix(rep(mu_grid, times = G2), nrow = G1, ncol = G2)
-  SIG <- matrix(rep(sigma_grid, each = G1), nrow = G1, ncol = G2)
-  SIG2 <- SIG^2
-  
-  # Get Type 1 indices
-  idx <- get_type1_indices(n, S)
-  
-  # ========== PDF Terms: Sum of log likelihoods for observed order statistics ==========
-  log_lik <- matrix(0, nrow = G1, ncol = G2)
-  for (x in X) {
-    log_lik <- log_lik + dnorm(x, mean = MU, sd = SIG, log = TRUE)
-  }
-  
-  # ========== CDF Terms: Based on order statistic likelihood ==========
-  tiny <- 1e-300  # Prevent log(0)
-  
-  if (S == 1) {
-    # X = {a, m, b} corresponding to {X_(k1), X_(k2), X_(k3)}
-    # Exponents: (k2 - k1 - 1) and (k3 - k2 - 1)
-    
-    p1 <- pnorm((X[1] - MU) / SIG)  # F(a)
-    p2 <- pnorm((X[2] - MU) / SIG)  # F(m)
-    p3 <- pnorm((X[3] - MU) / SIG)  # F(b)
-    
-    exp1 <- idx$k2 - idx$k1 - 1
-    exp2 <- idx$k3 - idx$k2 - 1
-    
-    cdf_terms <- exp1 * log(pmax(p2 - p1, tiny)) + 
-                 exp2 * log(pmax(p3 - p2, tiny))
-    
-  } else if (S == 2) {
-    # X = {q1, m, q3} corresponding to {X_(k1), X_(k2), X_(k3)}
-    # Exponents: (k1-1), (k2 - k1 - 1), (k3 - k2 - 1), (n - k3)
-    
-    p1 <- pnorm((X[1] - MU) / SIG)  # F(q1)
-    p2 <- pnorm((X[2] - MU) / SIG)  # F(m)
-    p3 <- pnorm((X[3] - MU) / SIG)  # F(q3)
-    
-    exp0 <- idx$k1 - 1
-    exp1 <- idx$k2 - idx$k1 - 1
-    exp2 <- idx$k3 - idx$k2 - 1
-    exp3 <- n - idx$k3
-    
-    cdf_terms <- exp0 * log(pmax(p1, tiny)) +
-                 exp1 * log(pmax(p2 - p1, tiny)) + 
-                 exp2 * log(pmax(p3 - p2, tiny)) +
-                 exp3 * log(pmax(1 - p3, tiny))
-    
-  } else if (S == 3) {
-    # X = {a, q1, m, q3, b} corresponding to {X_(k0), X_(k1), X_(k2), X_(k3), X_(k4)}
-    # Exponents: (k1-k0-1), (k2-k1-1), (k3-k2-1), (k4-k3-1)
-    
-    p0 <- pnorm((X[1] - MU) / SIG)  # F(a)
-    p1 <- pnorm((X[2] - MU) / SIG)  # F(q1)
-    p2 <- pnorm((X[3] - MU) / SIG)  # F(m)
-    p3 <- pnorm((X[4] - MU) / SIG)  # F(q3)
-    p4 <- pnorm((X[5] - MU) / SIG)  # F(b)
-    
-    exp0 <- idx$k1 - idx$k0 - 1
-    exp1 <- idx$k2 - idx$k1 - 1
-    exp2 <- idx$k3 - idx$k2 - 1
-    exp3 <- idx$k4 - idx$k3 - 1
-    
-    cdf_terms <- exp0 * log(pmax(p1 - p0, tiny)) +
-                 exp1 * log(pmax(p2 - p1, tiny)) + 
-                 exp2 * log(pmax(p3 - p2, tiny)) +
-                 exp3 * log(pmax(p4 - p3, tiny))
-  }
-  
-  # ========== Priors ==========
-  # Uniform prior on mu: p(mu) = 1/(U-L)
-  if (L >= U) stop("Lower bound should be smaller than upper bound!")
-  log_prior_mu <- -log(U - L)
-  
-  # Inverse-gamma prior on sigma^2: p(sigma^2) ~ IG(alpha, beta)
-  if (alpha <= 0 || beta <= 0) stop("Alpha and beta should both be positive!")
-  log_prior_sigma2 <- alpha * log(beta) - lgamma(alpha) - 
-                      (alpha + 1) * log(SIG2) - beta / SIG2
-  
-  # Return: log posterior = log likelihood + log prior
-  log_lik + cdf_terms + log_prior_mu + log_prior_sigma2
+    int k0 = 1, k1, k2, k3, k4;
+    if (S == 1) { k1 = 1; k2 = (int)std::ceil(0.5*n); k3 = n; }
+    else if (S == 2) { k1=(int)std::ceil(0.25*n); k2=(int)std::ceil(0.5*n); k3=(int)std::ceil(0.75*n); }
+    else { k0=1; k1=(int)std::ceil(0.25*n); k2=(int)std::ceil(0.5*n); k3=(int)std::ceil(0.75*n); k4=n; }
+
+    for (int j = 0; j < G2; j++) {
+        double sig = sigma_grid[j], sig2 = sig*sig, inv_sig = 1.0/sig;
+        double log_prior_sigma2 = alpha_prior*std::log(beta_prior) - std::lgamma(alpha_prior)
+            - (alpha_prior+1.0)*std::log(sig2) - beta_prior/sig2;
+        for (int i = 0; i < G1; i++) {
+            double mu = mu_grid[i], log_lik = 0.0;
+            for (int k = 0; k < nX; k++) log_lik += dnorm_log(X[k], mu, sig);
+            std::vector<double> p(nX);
+            for (int k = 0; k < nX; k++) p[k] = pnorm_fast((X[k]-mu)*inv_sig);
+            double cdf_terms = 0.0;
+            if (S == 1) {
+                cdf_terms = (k2-k1-1)*safe_log(p[1]-p[0]) + (k3-k2-1)*safe_log(p[2]-p[1]);
+            } else if (S == 2) {
+                cdf_terms = (k1-1)*safe_log(p[0]) + (k2-k1-1)*safe_log(p[1]-p[0])
+                    + (k3-k2-1)*safe_log(p[2]-p[1]) + (n-k3)*safe_log(1.0-p[2]);
+            } else {
+                cdf_terms = (k1-k0-1)*safe_log(p[1]-p[0]) + (k2-k1-1)*safe_log(p[2]-p[1])
+                    + (k3-k2-1)*safe_log(p[3]-p[2]) + (k4-k3-1)*safe_log(p[4]-p[3]);
+            }
+            log_post(i,j) = log_lik + cdf_terms + log_prior_mu + log_prior_sigma2;
+        }
+    }
+    return log_post;
 }
 
-#===============================================================================
-#                    ADAPTIVE POSTERIOR SAMPLING
-#===============================================================================
+// Quantile from discrete marginal posterior
+// [[Rcpp::export]]
+double quantile_from_grid_cpp(NumericVector grid_values,
+                              NumericVector probabilities,
+                              double quantile_level) {
+    int n = grid_values.size();
+    double sum_prob = 0.0;
+    for (int i = 0; i < n; i++) sum_prob += probabilities[i];
+    std::vector<double> cdf(n); double cum_sum = 0.0;
+    for (int i = 0; i < n; i++) { cum_sum += probabilities[i]/sum_prob; cdf[i] = cum_sum; }
+    if (quantile_level <= cdf[0]) return grid_values[0];
+    if (quantile_level >= cdf[n-1]) return grid_values[n-1];
+    int idx_before = 0;
+    for (int i = 0; i < n; i++) { if (cdf[i] < quantile_level) idx_before = i; else break; }
+    int idx_after = idx_before + 1;
+    return grid_values[idx_before] + (quantile_level - cdf[idx_before]) /
+        (cdf[idx_after] - cdf[idx_before]) * (grid_values[idx_after] - grid_values[idx_before]);
+}
 
-#' Adaptive Grid-Based Posterior Sampler
-#'
-#' Two-stage adaptive sampling: (1) coarse grid to find region of interest,
-#' (2) fine grid within ROI for accurate posterior approximation.
-#'
-#' @param X Vector of observed order statistics
-#' @param n Sample size
-#' @param S Scenario type (1, 2, or 3)
-#' @param L Lower bound for mu
-#' @param U Upper bound for mu
-#' @param L_sig Lower bound for sigma
-#' @param U_sig Upper bound for sigma
-#' @param coarse Coarse grid size (default: 128)
-#' @param fine Fine grid size (default: 256)
-#' @param mass Probability mass to capture in ROI (default: 0.99)
-#' @param n_samples Number of posterior samples to draw (default: 1000)
-#' @param alpha Inverse-gamma shape parameter (default: 0.01)
-#' @param beta Inverse-gamma scale parameter (default: 0.01)
-#'
-#' @return List with elements:
-#'   - mu: Vector of posterior samples for mu
-#'   - sig: Vector of posterior samples for sigma
-#'
-#' @details The adaptive approach:
-#'   1. Coarse grid (e.g., 128x128) to identify high-density region
-#'   2. Refine grid (e.g., 256x256) within region containing 99% of mass
-#'   3. Draw samples proportional to posterior density
-#'
-#' @examples
-#' X <- c(3.2, 5.0, 6.8)
-#' samp <- get_posterior_samples_adaptive(X, n=30, S=1, L=0, U=10, 
-#'                                        L_sig=0.1, U_sig=5)
-#' mean(samp$mu)      # Posterior mean of mu
-#' median(samp$sig)   # Posterior median of sigma
-#'
-#' @export
-get_posterior_samples_adaptive <- function(X, n, S, L, U, L_sig, U_sig,
-                                           coarse = 128, fine = 256,
-                                           mass = 0.99, n_samples = 1000,
-                                           alpha = 0.01, beta = 0.01) {
-  # ========== Stage 1: Coarse Grid ==========
-  mu_c <- seq(L, U, length.out = coarse)
+// Posterior summary: point estimates + credible intervals (95/90/80%).
+// [[Rcpp::export]]
+List compute_posterior_statistics_cpp(NumericVector mu_grid,
+                                      NumericVector sigma_grid,
+                                      NumericMatrix w_f) {
+    int G1 = mu_grid.size(), G2 = sigma_grid.size();
+    double w_sum = 0.0;
+    for (int i = 0; i < G1; i++)
+        for (int j = 0; j < G2; j++) w_sum += w_f(i,j);
+    NumericVector post_mu(G1), post_sigma(G2);
+    for (int i = 0; i < G1; i++) {
+        double s=0; for (int j=0;j<G2;j++) s+=w_f(i,j); post_mu[i]=s/w_sum;
+    }
+    for (int j = 0; j < G2; j++) {
+        double s=0; for (int i=0;i<G1;i++) s+=w_f(i,j); post_sigma[j]=s/w_sum;
+    }
+    double mu_mean=0, sigma_mean=0;
+    for (int i=0;i<G1;i++) mu_mean += mu_grid[i]*post_mu[i];
+    for (int j=0;j<G2;j++) sigma_mean += sigma_grid[j]*post_sigma[j];
+    return List::create(
+        Named("mu_mean")=mu_mean,
+        Named("mu_median")=quantile_from_grid_cpp(mu_grid, post_mu, 0.5),
+        Named("mu_ci_95")=NumericVector::create(
+            quantile_from_grid_cpp(mu_grid,post_mu,0.025), quantile_from_grid_cpp(mu_grid,post_mu,0.975)),
+        Named("mu_ci_90")=NumericVector::create(
+            quantile_from_grid_cpp(mu_grid,post_mu,0.05), quantile_from_grid_cpp(mu_grid,post_mu,0.95)),
+        Named("mu_ci_80")=NumericVector::create(
+            quantile_from_grid_cpp(mu_grid,post_mu,0.10), quantile_from_grid_cpp(mu_grid,post_mu,0.90)),
+        Named("sigma_mean")=sigma_mean,
+        Named("sigma_median")=quantile_from_grid_cpp(sigma_grid, post_sigma, 0.5),
+        Named("sigma_ci_95")=NumericVector::create(
+            quantile_from_grid_cpp(sigma_grid,post_sigma,0.025), quantile_from_grid_cpp(sigma_grid,post_sigma,0.975)),
+        Named("sigma_ci_90")=NumericVector::create(
+            quantile_from_grid_cpp(sigma_grid,post_sigma,0.05), quantile_from_grid_cpp(sigma_grid,post_sigma,0.95)),
+        Named("sigma_ci_80")=NumericVector::create(
+            quantile_from_grid_cpp(sigma_grid,post_sigma,0.10), quantile_from_grid_cpp(sigma_grid,post_sigma,0.90))
+    );
+}
+
+// Mixture normal random generator
+// [[Rcpp::export]]
+NumericVector rmixnorm_cpp(int n, double mu1, double sigma1,
+                           double mu2, double sigma2, double p1) {
+    NumericVector result(n);
+    for (int i = 0; i < n; i++) {
+        if (R::runif(0.0, 1.0) < p1) result[i] = R::rnorm(mu1, sigma1);
+        else result[i] = R::rnorm(mu2, sigma2);
+    }
+    return result;
+}
+'
+
+message("Compiling Rcpp code...")
+sourceCpp(code = rcpp_code)
+message("Rcpp compiled successfully.")
+
+# ============================================================================
+# Two-Stage Adaptive Grid Posterior
+# ============================================================================
+
+get_posterior_weights_adaptive <- function(X, n, S, L, U, L_sig, U_sig,
+                                          coarse = 128, fine = 256, mass = 0.99,
+                                          alpha_prior = 0.01, beta_prior = 0.01) {
+  mu_c  <- seq(L, U, length.out = coarse)
   sig_c <- seq(L_sig, U_sig, length.out = coarse)
-  lp_c <- compute_logpost_grid_fast(mu_c, sig_c, X, n, S, L, U, alpha, beta)
-  w_c <- exp(lp_c - max(lp_c, na.rm = TRUE))
-  w_sum <- sum(w_c)
-  
-  # Fallback: if posterior is degenerate, sample uniformly
+  lp_c  <- compute_logpost_grid_cpp(mu_c, sig_c, X, n, S, L, U, alpha_prior, beta_prior)
+
+  max_lp <- max(lp_c, na.rm = TRUE)
+  w_c <- exp(lp_c - max_lp); w_sum <- sum(w_c)
   if (!is.finite(w_sum) || w_sum <= 0) {
-    mu_smpl <- runif(n_samples, min = L, max = U)
-    sig_smpl <- runif(n_samples, min = L_sig, max = U_sig)
-    return(list(mu = mu_smpl, sig = sig_smpl))
+    w_f <- matrix(1, fine, fine)
+    return(list(mu_grid = seq(L, U, length.out = fine),
+                sigma_grid = seq(L_sig, U_sig, length.out = fine),
+                w_f = w_f / sum(w_f)))
   }
   w_c <- w_c / w_sum
-  
-  # Determine region of interest (ROI) containing 'mass' of probability
-  flat_order <- order(as.vector(w_c), decreasing = TRUE)
-  flat_w <- as.vector(w_c)[flat_order]
-  csum <- cumsum(flat_w)
-  cut_idx <- which(csum >= mass)[1]
-  thr <- flat_w[cut_idx]
+
+  flat_w <- sort(as.vector(w_c), decreasing = TRUE)
+  thr <- flat_w[which(cumsum(flat_w) >= mass)[1]]
   idx_mat <- which(w_c >= thr, arr.ind = TRUE)
-  mu_idx <- unique(idx_mat[, 1])
-  sig_idx <- unique(idx_mat[, 2])
-  mu_min <- min(mu_c[mu_idx]); mu_max <- max(mu_c[mu_idx])
-  sig_min <- min(sig_c[sig_idx]); sig_max <- max(sig_c[sig_idx])
-  
-  # Add padding around ROI
-  mu_pad <- max(1e-8, 0.1 * (mu_max - mu_min))
-  sig_pad <- max(1e-8, 0.1 * (sig_max - sig_min))
-  mu_lo <- max(L, mu_min - mu_pad); mu_hi <- min(U, mu_max + mu_pad)
-  sig_lo <- max(L_sig, sig_min - sig_pad); sig_hi <- min(U_sig, sig_max + sig_pad)
-  
-  # ========== Stage 2: Fine Grid within ROI ==========
-  mu_f <- seq(mu_lo, mu_hi, length.out = fine)
-  sig_f <- seq(sig_lo, sig_hi, length.out = fine)
-  lp_f <- compute_logpost_grid_fast(mu_f, sig_f, X, n, S, L, U, alpha, beta)
-  w_f <- exp(lp_f - max(lp_f, na.rm = TRUE))
-  w_sum_f <- sum(w_f)
-  
-  # Fallback to coarse grid if fine grid fails
-  if (!is.finite(w_sum_f) || w_sum_f <= 0) {
-    post_mu_c <- rowSums(w_c)
-    mu_idx_s <- sample.int(length(mu_c), size = n_samples, replace = TRUE, prob = post_mu_c)
-    sig_idx_s <- vapply(mu_idx_s, function(i) {
-      row <- w_c[i, ]
-      if (sum(row) <= 0 || !all(is.finite(row))) sample.int(length(sig_c), 1) 
-      else sample.int(length(sig_c), 1, prob = row)
-    }, integer(1))
-    return(list(mu = mu_c[mu_idx_s], sig = sig_c[sig_idx_s]))
-  }
-  w_f <- w_f / w_sum_f
-  
-  # ========== Draw Samples from Fine Grid ==========
-  # Marginal distribution of mu
-  post_mu <- rowSums(w_f)
-  if (any(!is.finite(post_mu)) || sum(post_mu) <= 0) {
-    post_mu[] <- 1 / length(post_mu)
-  }
-  
-  # Sample mu indices
-  mu_idx_s <- sample.int(length(mu_f), size = n_samples, replace = TRUE, prob = post_mu)
-  
-  # For each mu, sample sigma from conditional distribution
-  sig_idx_s <- vapply(mu_idx_s, function(i) {
-    row <- w_f[i, ]
-    s <- sum(row)
-    if (!is.finite(s) || s <= 0) {
-      sample.int(length(sig_f), 1)
-    } else {
-      sample.int(length(sig_f), 1, prob = row)
-    }
-  }, integer(1))
-  
-  list(mu = mu_f[mu_idx_s], sig = sig_f[sig_idx_s])
+  mu_range  <- range(mu_c[unique(idx_mat[, 1])])
+  sig_range <- range(sig_c[unique(idx_mat[, 2])])
+
+  mu_pad  <- max(1e-8, 0.1 * diff(mu_range))
+  sig_pad <- max(1e-8, 0.1 * diff(sig_range))
+  mu_f  <- seq(max(L, mu_range[1] - mu_pad), min(U, mu_range[2] + mu_pad), length.out = fine)
+  sig_f <- seq(max(L_sig, sig_range[1] - sig_pad), min(U_sig, sig_range[2] + sig_pad), length.out = fine)
+
+  lp_f <- compute_logpost_grid_cpp(mu_f, sig_f, X, n, S, L, U, alpha_prior, beta_prior)
+  w_f <- exp(lp_f - max(lp_f, na.rm = TRUE)); w_sum_f <- sum(w_f)
+  if (!is.finite(w_sum_f) || w_sum_f <= 0) return(list(mu_grid = mu_c, sigma_grid = sig_c, w_f = w_c))
+  list(mu_grid = mu_f, sigma_grid = sig_f, w_f = w_f / w_sum_f)
 }
 
-#===============================================================================
-#                         MAIN BOSE ESTIMATION
-#===============================================================================
+# ============================================================================
+# Competing Methods Wrapper
+# ============================================================================
+# Returns: list(mu_luo, sigma_wan, sigma_shi, mu_blue, sigma_blue,
+#               blue_Var_mu, blue_Var_sigma, mu_bc, sigma_bc,
+#               mu_qe, sigma_qe, mu_mln, sigma_mln)
 
-#' BOSE: Main Estimation Function
-#'
-#' Estimates mean and standard deviation from order statistics using Bayesian
-#' methods with Type 1 quantiles.
-#'
-#' @param X Vector of observed order statistics (length 3 or 5)
-#' @param n Sample size
-#' @param S Scenario type (1, 2, or 3)
-#' @param coarse_size Coarse grid size (default: 128)
-#' @param fine_size Fine grid size (default: 256)
-#' @param n_post_samples Number of posterior samples (default: 1000)
-#' @param z Factor for initial bounds (default: 5)
-#'
-#' @return List with:
-#'   - mu_est: Posterior mean of mu
-#'   - sigma_est: Posterior median of sigma
-#'   - mu_CI: 95% credible interval for mu
-#'   - sigma_CI: 95% credible interval for sigma
-#'   - post_samples: List of posterior samples (mu, sig)
-#'
-#' @details Uses Luo's method for initial mu estimate and Wan's method for
-#'   initial sigma estimate to set adaptive grid bounds.
-#'
-#' @examples
-#' # Three-number summary: {min, median, max}
-#' X <- c(3.2, 5.0, 6.8)
-#' result <- estimate_bose(X, n = 30, S = 1)
-#' result$mu_est
-#' result$sigma_est
-#'
-#' @export
-estimate_bose <- function(X, n, S, 
-                          coarse_size = 128, 
-                          fine_size = 256,
-                          n_post_samples = 1000,
-                          z = 5) {
-  
-  # Get initial estimates using frequentist methods
-  # Note: Requires estmeansd package
+run_competing_methods <- function(X, n, S) {
   if (S == 1) {
     sigma_wan <- Wan.std(X, n, type = "S1")$sigmahat
-    mu_luo <- Luo.mean(X, n, type = "S1")$muhat
+    mu_luo    <- Luo.mean(X, n, type = "S1")$muhat
+    blue      <- BLUE_s(X, n, type = "S1")
+    sigma_shi <- NA
+    bc <- tryCatch({ b <- bc.mean.sd(min.val=X[1],med.val=X[2],max.val=X[3],n=n,preserve.tail=FALSE,avoid.mc=FALSE); list(mu=b$est.mean,sigma=b$est.sd) }, error=function(e) list(mu=NA,sigma=NA))
+    qe <- tryCatch({ q <- qe.mean.sd(min.val=X[1],med.val=X[2],max.val=X[3],n=n); list(mu=q$est.mean,sigma=q$est.sd) }, error=function(e) list(mu=NA,sigma=NA))
+    ml <- tryCatch({ m <- mln.mean.sd(min.val=X[1],med.val=X[2],max.val=X[3],n=n); list(mu=m$est.mean,sigma=m$est.sd) }, error=function(e) list(mu=NA,sigma=NA))
   } else if (S == 2) {
     sigma_wan <- Wan.std(X, n, type = "S2")$sigmahat
-    mu_luo <- Luo.mean(X, n, type = "S2")$muhat
-  } else if (S == 3) {
+    mu_luo    <- Luo.mean(X, n, type = "S2")$muhat
+    blue      <- BLUE_s(X, n, type = "S2")
+    sigma_shi <- NA
+    bc <- tryCatch({ b <- bc.mean.sd(q1.val=X[1],med.val=X[2],q3.val=X[3],n=n,preserve.tail=FALSE,avoid.mc=FALSE); list(mu=b$est.mean,sigma=b$est.sd) }, error=function(e) list(mu=NA,sigma=NA))
+    qe <- tryCatch({ q <- qe.mean.sd(q1.val=X[1],med.val=X[2],q3.val=X[3],n=n); list(mu=q$est.mean,sigma=q$est.sd) }, error=function(e) list(mu=NA,sigma=NA))
+    ml <- tryCatch({ m <- mln.mean.sd(q1.val=X[1],med.val=X[2],q3.val=X[3],n=n); list(mu=m$est.mean,sigma=m$est.sd) }, error=function(e) list(mu=NA,sigma=NA))
+  } else {
+    phi1 <- qnorm((n - 0.375) / (n + 0.25))
+    phi2 <- qnorm((0.75 * n - 0.125) / (n + 0.25))
     sigma_wan <- Wan.std(X, n, type = "S3")$sigmahat
-    mu_luo <- Luo.mean(X, n, type = "S3")$muhat
+    mu_luo    <- Luo.mean(X, n, type = "S3")$muhat
+    sigma_shi <- (X[5]-X[1])/((2+0.14*n^0.6)*phi1) + (X[4]-X[2])/((2+2/(0.07*n^0.6))*phi2)
+    blue      <- BLUE_s(X, n, type = "S3")
+    bc <- tryCatch({ b <- bc.mean.sd(min.val=X[1],q1.val=X[2],med.val=X[3],q3.val=X[4],max.val=X[5],n=n,preserve.tail=FALSE,avoid.mc=FALSE); list(mu=b$est.mean,sigma=b$est.sd) }, error=function(e) list(mu=NA,sigma=NA))
+    qe <- tryCatch({ q <- qe.mean.sd(min.val=X[1],q1.val=X[2],med.val=X[3],q3.val=X[4],max.val=X[5],n=n); list(mu=q$est.mean,sigma=q$est.sd) }, error=function(e) list(mu=NA,sigma=NA))
+    ml <- tryCatch({ m <- mln.mean.sd(min.val=X[1],q1.val=X[2],med.val=X[3],q3.val=X[4],max.val=X[5],n=n); list(mu=m$est.mean,sigma=m$est.sd) }, error=function(e) list(mu=NA,sigma=NA))
   }
+  list(mu_luo = mu_luo, sigma_wan = sigma_wan, sigma_shi = sigma_shi,
+       mu_blue = as.numeric(blue$muhat), sigma_blue = as.numeric(blue$sigmahat),
+       blue_Var_mu = as.numeric(blue$Var_mu), blue_Var_sigma = as.numeric(blue$Var_sigma),
+       mu_bc = bc$mu, sigma_bc = bc$sigma,
+       mu_qe = qe$mu, sigma_qe = qe$sigma,
+       mu_mln = ml$mu, sigma_mln = ml$sigma)
+}
+
+# ============================================================================
+# True Parameter Computation
+# ============================================================================
+
+get_true_params <- function(dist, params) {
+  if (dist == "normal") {
+    list(mean = params$mu_true, sd = params$sigma_true)
+  } else if (dist == "lognormal") {
+    list(mean = exp(params$meanlog + params$sdlog^2 / 2),
+         sd = sqrt((exp(params$sdlog^2) - 1) * exp(2*params$meanlog + params$sdlog^2)))
+  } else if (dist == "gamma_dist") {
+    list(mean = params$shape / params$rate, sd = sqrt(params$shape) / params$rate)
+  } else if (dist == "t_dist") {
+    list(mean = 0, sd = if (params$df > 2) sqrt(params$df / (params$df - 2)) else Inf)
+  } else if (dist %in% c("mixture_normal", "mixture_mild", "mixture_asym")) {
+    m <- params$p1 * params$mu1 + (1 - params$p1) * params$mu2
+    v <- params$p1 * (params$sigma1^2 + params$mu1^2) +
+         (1 - params$p1) * (params$sigma2^2 + params$mu2^2) - m^2
+    list(mean = m, sd = sqrt(v))
+  } else stop(paste("Unknown distribution:", dist))
+}
+
+# ============================================================================
+# Data Generation
+# ============================================================================
+
+generate_data <- function(n, dist, params) {
+  switch(dist,
+    "normal"     = rnorm(n, params$mu_true, params$sigma_true),
+    "lognormal"  = rlnorm(n, params$meanlog, params$sdlog),
+    "gamma_dist" = rgamma(n, params$shape, params$rate),
+    "t_dist"     = rt(n, params$df),
+    "mixture_normal" =, "mixture_mild" =, "mixture_asym" =
+      rmixnorm_cpp(n, params$mu1, params$sigma1, params$mu2, params$sigma2, params$p1),
+    stop(paste("Unknown distribution:", dist))
+  )
+}
+
+# ============================================================================
+# Extract Summary Statistics (Type 1 quantile by default)
+# ============================================================================
+
+extract_summary_stats <- function(data, S, qtype = 1L) {
+  switch(S,
+    `1` = as.numeric(quantile(data, c(0, 0.5, 1), type = qtype)),
+    `2` = as.numeric(quantile(data, c(0.25, 0.5, 0.75), type = qtype)),
+    `3` = as.numeric(quantile(data, seq(0, 1, length.out = 5), type = qtype)),
+    stop("Invalid S value")
+  )
+}
+
+weighted_quantile <- function(values, weights, probs) {
+  ord <- order(values)
+  values <- values[ord]
+  weights <- weights[ord]
+  cum_w <- cumsum(weights) / sum(weights)
+  v_out <- sapply(probs, function(p) {
+    if (p <= cum_w[1]) return(values[1])
+    idx <- which(cum_w >= p)[1]
+    return(values[idx])
+  })
+  return(v_out)
+}
+
+# ============================================================================
+# Distribution Parameter Helpers
+# ============================================================================
+
+solve_sigma_lnorm <- function(target_skew) {
+  uniroot(function(s) { u <- exp(s^2); (u+2)*sqrt(u-1) - target_skew },
+          interval = c(1e-6, 10))$root
+}
+
+# ============================================================================
+# Logging Helper
+# ============================================================================
+
+make_logger <- function(progress_file) {
+  function(msg) {
+    m <- paste0("[", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), "] ", msg)
+    message(m)
+    cat(m, "\n", file = progress_file, append = TRUE)
+  }
+}
+
+# ============================================================================
+# Main API Function
+# ============================================================================
+
+estimate_bose <- function(X, n, S, z = 5) {
+  # 1. Get initial estimates to set grid bounds
+  comp <- run_competing_methods(X, n, S)
   
-  # Set adaptive grid bounds based on initial estimates
-  L <- mu_luo - z * sigma_wan
-  U <- mu_luo + z * sigma_wan
-  L_sig <- max(sigma_wan / z, 1e-8)
-  U_sig <- max(z * sigma_wan, L_sig * 1.0001)
+  # 2. Determine adaptive grid range
+  L_b <- comp$mu_luo - z * comp$sigma_wan
+  U_b <- comp$mu_luo + z * comp$sigma_wan
+  L_s <- max(comp$sigma_wan / z, 1e-8)
+  U_s <- max(z * comp$sigma_wan, L_s * 1.0001)
   
-  # Draw posterior samples
-  samp <- get_posterior_samples_adaptive(
-    X = X, n = n, S = S,  
-    L = L, U = U, L_sig = L_sig, U_sig = U_sig,
-    coarse = coarse_size, fine = fine_size, 
-    mass = 0.99, n_samples = n_post_samples
+  # 3. Compute posterior weights
+  res <- get_posterior_weights_adaptive(X, n, S, L_b, U_b, L_s, U_s)
+  
+  # 4. Extract Mean and SD statistics
+  stats <- compute_posterior_statistics_cpp(res$mu_grid, res$sigma_grid, res$w_f)
+  
+  # 5. Compute CV and its 95% CI
+  mu_mat <- matrix(res$mu_grid, nrow = length(res$mu_grid), ncol = length(res$sigma_grid))
+  sig_mat <- matrix(res$sigma_grid, nrow = length(res$mu_grid), ncol = length(res$sigma_grid), byrow = TRUE)
+  cv_vals <- as.vector(sig_mat / mu_mat)
+  w_flat <- as.vector(res$w_f)
+  
+  cv_mean <- sum(cv_vals * w_flat)
+  cv_ci <- weighted_quantile(cv_vals, w_flat, c(0.025, 0.975))
+  
+  # 6. Return structured list (invisible for clean console, but usable for objects)
+  results <- list(
+    mean = list(est = stats$mu_mean, ci = stats$mu_ci_95),
+    sd   = list(est = stats$sigma_median, ci = stats$sigma_ci_95),
+    cv   = list(est = cv_mean, ci = cv_ci)
   )
   
-  post.mu <- samp$mu
-  post.sig <- samp$sig
+  # Optional: Print clean summary to console
+  message("\n--- BOSE Estimation Summary ---")
+  cat(sprintf("Mean: %.4f (95%% CI: [%.4f, %.4f])\n", results$mean$est, results$mean$ci[1], results$mean$ci[2]))
+  cat(sprintf("SD:   %.4f (95%% CI: [%.4f, %.4f])\n", results$sd$est,   results$sd$ci[1],   results$sd$ci[2]))
+  cat(sprintf("CV:   %.4f (95%% CI: [%.4f, %.4f])\n", results$cv$est,   results$cv$ci[1],   results$cv$ci[2]))
   
-  # Point estimates
-  mu_est <- mean(post.mu)
-  sigma_est <- median(post.sig)
-  
-  # 95% credible intervals
-  ci_mu <- quantile(post.mu, c(0.025, 0.975))
-  ci_sigma <- quantile(post.sig, c(0.025, 0.975))
-  
-  return(list(
-    mu_est = mu_est,
-    sigma_est = sigma_est,
-    mu_CI = as.numeric(ci_mu),
-    sigma_CI = as.numeric(ci_sigma),
-    post_samples = list(mu = post.mu, sig = post.sig),
-    initial_estimates = list(mu_luo = mu_luo, sigma_wan = sigma_wan)
-  ))
+  return(invisible(results))
 }
