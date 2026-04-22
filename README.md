@@ -75,6 +75,7 @@ BOSE handles three types of order statistics commonly reported in literature:
 | **S = 1** | Three-number | `{min, median, max}` | `c(3.2, 5.0, 6.8)` | Oldest meta-analyses, clinical trials |
 | **S = 2** | Quartiles | `{Q1, median, Q3}` | `c(4.0, 5.0, 6.0)` | Modern reporting, box plots |
 | **S = 3** | Five-number | `{min, Q1, median, Q3, max}` | `c(3.2, 4.0, 5.0, 6.0, 6.8)` | Complete summary, Tukey's five-number |
+
 ---
 
 ## 📄 License
@@ -87,14 +88,15 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Wenqisi (Lydia) Pan**  
 PhD Candidate, Statistics
-University of Texas at Arlington  
+The University of Texas at Arlington  
 📧 wenqisi.pan@uta.edu  
 🔗 [GitHub: @Lydia0205](https://github.com/Lydia0205)
 
 **Advisor: Dr. Xinlei Wang**  
+📧 xinlei.wang@uta.edu  
 Jenkins-Garrett Professor  
 Department of Mathematics  
-University of Texas at Arlington
+The University of Texas at Arlington
 
 ---
 
