@@ -113,11 +113,11 @@ The University of Texas at Arlington
 If you use BOSE in your research, please cite:
 
 ```bibtex
-@article{pan2025bose,
+@article{pan2026bose,
   title={BOSE: A Bayesian Order Statistics Estimator for Recovering the Sample Mean and Standard Deviation},
   author={Pan, Wenqisi and Wang, Xinlei},
   journal={In Preparation},
-  year={2025},
+  year={2026},
   note={GitHub: https://github.com/Lydia0205/BOSE-bayesian-order-statistics-estimator}
 }
 ```
