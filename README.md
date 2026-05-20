@@ -87,10 +87,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📧 Contact
 
 **Wenqisi (Lydia) Pan**  
-PhD Candidate, Statistics
-The University of Texas at Arlington  
-📧 wenqisi.pan@uta.edu  
-🔗 [GitHub: @Lydia0205](https://github.com/Lydia0205)
+📧 wenqisi.pan@uta.edu <br>
+PhD Candidate, Statistics <br>
+Department of Mathematics <br>
+The University of Texas at Arlington <br>
 
 **Advisor: Dr. Xinlei Wang**  
 📧 xinlei.wang@uta.edu  
@@ -114,7 +114,7 @@ If you use BOSE in your research, please cite:
 
 ```bibtex
 @article{pan2026bose,
-  title={BOSE: A Bayesian Order Statistics Estimator for Recovering the Sample Mean and Standard Deviation},
+  title={BOSE: A Bayesian Order Statistics Based Estimator for Recovering the Sample Mean and Standard Deviation},
   author={Pan, Wenqisi and Wang, Xinlei},
   journal={In Preparation},
   year={2026},
