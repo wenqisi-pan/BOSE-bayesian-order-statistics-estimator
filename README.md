@@ -118,7 +118,7 @@ If you use BOSE in your research, please cite:
   author={Pan, Wenqisi and Wang, Xinlei},
   journal={In Preparation},
   year={2026},
-  note={GitHub: https://github.com/Lydia0205/BOSE-bayesian-order-statistics-estimator}
+  note={GitHub: https://github.com/wenqisi-pan/BOSE-bayesian-order-statistics-estimator}
 }
 ```
 
