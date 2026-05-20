@@ -3,7 +3,7 @@ library(bslib)
 library(ggplot2)
 library(patchwork)
 
-source("00_bose_core.R")
+source("bose_core.R")
 
 weighted_quantile <- function(values, weights, probs) {
   ord <- order(values)
